@@ -1,0 +1,48 @@
+rules_version = '2';
+// قواعد حماية قاعدة بيانات ثانوية العدالة للبنين
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function me() { return get(/databases/$(database)/documents/staff/$(request.auth.uid)).data; }
+    function staff() { return signedIn() && exists(/databases/$(database)/documents/staff/$(request.auth.uid)) && me().active == true; }
+    function manager() { return staff() && (me().role == 'admin' || me().role == 'supervisor'); }
+    function isAdmin() { return staff() && me().role == 'admin'; }
+
+    // إعدادات المدرسة: الاسم والشعار يظهرون للكل، والتعديل للإدارة
+    match /config/school {
+      allow get: if true;
+      allow create: if signedIn() && request.resource.data.adminUid == request.auth.uid;
+      allow update: if manager() && request.resource.data.adminUid == resource.data.adminUid;
+    }
+    // حسابات المدرسين والمشرفين
+    match /staff/{uid} {
+      allow get: if signedIn() && (request.auth.uid == uid || staff());
+      allow list: if staff();
+      allow create: if manager() || (signedIn() && uid == request.auth.uid && get(/databases/$(database)/documents/config/school).data.adminUid == request.auth.uid);
+      allow update: if manager() && (resource.data.role != 'admin' || isAdmin());
+      allow delete: if isAdmin() && resource.data.role != 'admin';
+    }
+    match /classes/{id} { allow read: if true; allow write: if manager(); }
+    // الجداول: يشوفها الكل، وترفعها الإدارة
+    match /timetables/{id} { allow read: if true; allow write: if manager(); }
+
+    // ملف الطالب: ينقرأ فقط بمعرفة الكود، ولا أحد يكدر يعرض قائمة الطلاب إلا الكادر
+    match /students/{code} {
+      allow get: if true;
+      allow list: if staff();
+      allow create, delete: if manager();
+      allow update: if staff() || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['parent']);
+    }
+    match /announcements/{id} {
+      allow read: if true;
+      allow create: if staff() && request.resource.data.by == request.auth.uid;
+      allow update, delete: if manager() || (staff() && resource.data.by == request.auth.uid);
+    }
+    match /summons/{id} { allow read, write: if manager(); }
+    match /summonsReq/{id} { allow read, create: if staff(); allow update, delete: if manager(); }
+    match /templates/{id} { allow read: if staff(); allow write: if manager(); }
+    match /alerts/{id} { allow read: if manager(); allow write: if staff(); }
+    match /pending/{id} { allow read, create: if staff(); allow update, delete: if manager(); }
+    match /log/{id} { allow create: if staff(); allow read, delete: if manager(); }
+  }
+}
